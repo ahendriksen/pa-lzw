@@ -11,12 +11,15 @@
 #define BUFSZ	   (3 * WINDOWSZ)
 
 
-
 struct triple{
   int offset;
   int length;
   char c;
 };
+
+int compress_buffer(char *buffer, int length, int start, int end, 
+		    struct triple *output);
+
 
 char	      buffer[BUFSZ];
 struct triple outp[BUFSZ];
@@ -109,9 +112,64 @@ int main(int argc, char * argv[])
     i = i % (2 * WINDOWSZ);
   }
 
-    
-  
-
-  
   return 0; 
+}
+
+
+/* compress_buffer
+
+   arguments: 
+   - buffer: input buffer;
+   - length: length of the input buffer;
+   - start: start compression at index start;
+   - end: stop compressing before end 
+     (strictly speaking: the last triple should not start with the char at end)
+   - output: buffer for output triples. Should have length equal to buffer. 
+
+   returns: 
+   an int with the last index used for compression. 
+ */ 
+int compress_buffer(char *buffer, int length, int start, int end, 
+		    struct triple *output)
+{
+
+  int		i, j;	// i is index into buffer, j into outp
+  struct triple best_t;	// contains the best triple for each i
+  int		l, o;	// contains length, offset running variables
+  int		max_offset;
+
+  i = start; 
+  for(; i < end; i += best_t.length + 1){
+    best_t.offset = 0;
+    best_t.length = 0;
+    best_t.c      = buffer[i];
+
+    // Look for common substrings
+    max_offset = (i + 1 < WINDOWSZ) ? i + 1 : WINDOWSZ; // TODO: not sure this is correct
+    for(o = 0; o < max_offset; o++){
+      // The following must hold
+      // - i - o + l < i
+      // - i + l < buff_len
+      // - There must be a char left at the end of the
+      //   buffer to put in the triple.
+      for(l = 0; l <= o && i + l < length; l++){
+	if(buffer[i + l] != buffer[i - o + l]){
+	  break; // l is now the length of the common substring
+	}
+      }
+      if(best_t.length < l){
+	best_t.offset = o;
+	best_t.length = l;
+	best_t.c      = buffer[i + l];
+      }
+    }
+
+    // best_t now contains the best triple for this index i
+    printf("(%d,%d,%c)\n", best_t.offset, best_t.length, best_t.c);
+    // store it
+    outp[j] = best_t;
+      
+    j++;
+  }
+  return i; 
 }
