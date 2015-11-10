@@ -13,7 +13,7 @@
 #define M            (K*K)
 
 #define MAX_LOOKBACK (512)
-#define WINDOWSZ     M
+#define WINDOWSZ     (4*K)
 #define BUFSZ	     (WINDOWSZ + 2 * MAX_LOOKBACK)
 
 struct triple{
@@ -22,13 +22,14 @@ struct triple{
   char c;
 };
 
+
+void compress_file2(FILE *in, FILE*out);
 void compress_file(FILE* file_input, FILE* file_output);
 int compress_buffer(char *buffer, int length, int start, int end, 
 		    struct triple *output, FILE* file_out);
 
 static char	      buffer[BUFSZ];
 static struct triple  outp[BUFSZ];
-
 
 inline int min(int a, int b)
 {
@@ -51,11 +52,70 @@ int main(int argc, char * argv[])
     printf("Output file could not be opened. \n");
   }
 
-  compress_file(fd_input, fd_output); 
+  compress_file2(fd_input, fd_output); 
 
   return 0; 
 }
 
+void compress_file2(FILE *in, FILE*out)
+{
+  static char lookback[WINDOWSZ]; 
+  int wrap = WINDOWSZ;
+  
+  int i = 0; // i is index into input
+  int o, l ,c; // running variables for offset, length, character
+  int max_length, max_offset;
+  int fb_len = 0; // forward buffer length
+  struct triple best_t; 
+
+  // fill forward buffer
+  for(; fb_len < MAX_LOOKBACK; fb_len++){
+    if((c = fgetc(in)) == EOF){ 
+      break;
+    }
+    lookback[(i + fb_len) % wrap] = c; 
+  }
+
+  while(fb_len > 0){ 
+    c = lookback[i % wrap];
+
+    best_t.offset = 0; 
+    best_t.length = 0; 
+    best_t.c = c;
+
+    max_offset = min(i, MAX_LOOKBACK); 
+    for(o = max_offset; best_t.length < o; o--){
+      // length cannot exceed offset. 
+      // Also, the last triple must contain buffer[length - 1] as character. 
+      max_length = min(o, fb_len - i - 1); 
+      for(l = 0; l < max_length; l++){
+    	if(lookback[(i + l) % wrap] != lookback[(i - o + l) % wrap]){
+    	  break;
+    	}
+      }
+      if(best_t.length < l) {
+    	best_t.offset = o;
+    	best_t.length = l;
+    	best_t.c      = lookback[(i + l) % wrap];
+      }
+    }
+    //printf("(%d,%d,%c)\n", best_t.offset, best_t.length, best_t.c);
+    fwrite(&best_t, sizeof(best_t), 1, out); 
+    i	   += best_t.length + 1; 
+    fb_len -= best_t.length + 1; 
+
+    // fill forward buffer
+    for(; fb_len < MAX_LOOKBACK; fb_len++){
+      if((c = fgetc(in)) == EOF){ 
+	break;
+      }
+      lookback[(i + fb_len) % wrap] = c; 
+    }
+
+  }
+
+
+}
 /* compress_file
    
    arguments: 

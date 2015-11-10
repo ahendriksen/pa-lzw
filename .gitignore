@@ -4,4 +4,6 @@
 output.bin
 lzw
 decompress
-testfile
+testfiles
+a.out
+compress
