@@ -7,21 +7,12 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
-#define K            1024
-#define M            (K*K)
+#include "lzw.h" 
 
-#define MAX_LOOKBACK 512
+// # of triples to read in at once. 
 #define BUFFER_SIZE  512
 
-
-struct triple{
-  int offset;
-  int length;
-  char c;
-};
-
-struct triple buffer[BUFFER_SIZE];
-char          lookback[MAX_LOOKBACK];
+void decompress(int fd_input); 
 
 
 int main(int argc, char * argv[])
@@ -36,6 +27,15 @@ int main(int argc, char * argv[])
     printf("Input file could not be opened. \n");
     exit(1);
   }
+
+
+  return 0; 
+}
+
+void decompress(int fd_input)
+{ 
+  static struct triple buffer[BUFFER_SIZE];
+  static char          lookback[MAX_LOOKBACK];
   
   ssize_t buff_sz;
   int i, j = 0;
@@ -55,6 +55,4 @@ int main(int argc, char * argv[])
       lookback[j++ % MAX_LOOKBACK] = t.c;
     }
   }
-
-  return 0; 
 }
