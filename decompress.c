@@ -7,8 +7,12 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
-#define WINDOWSZ   512
-#define BUFSZ      (3 * WINDOWSZ)
+#define K            1024
+#define M            (K*K)
+
+#define MAX_LOOKBACK 512
+#define BUFFER_SIZE  512
+
 
 struct triple{
   int offset;
@@ -16,8 +20,8 @@ struct triple{
   char c;
 };
 
-struct triple buffer[BUFSZ];
-char          outp[WINDOWSZ];
+struct triple buffer[BUFFER_SIZE];
+char          lookback[MAX_LOOKBACK];
 
 
 int main(int argc, char * argv[])
@@ -33,30 +37,24 @@ int main(int argc, char * argv[])
     exit(1);
   }
   
-  ssize_t buff_sz = read(fd_input, buffer, BUFSZ);
-
+  ssize_t buff_sz;
   int i, j = 0;
-  struct triple t; 
-  for(i = 0; i * sizeof(struct triple) < buff_sz; i++){
-    t = buffer[i];
-    int k; char c;
-    for(k = 0; k < t.length; k++){
-      c = outp[(j - t.offset + k) % WINDOWSZ];
-      putchar(c);
-      outp[(j + k) % WINDOWSZ] = c; 
+  int k; char c;
+  while((buff_sz = read(fd_input, buffer, BUFFER_SIZE * sizeof(buffer[0]))) > 0){ 
+    struct triple t; 
+    for(i = 0; i * sizeof(struct triple) < buff_sz; i++){
+      t = buffer[i];
+      // decode prefix
+      for(k = 0; k < t.length; k++){
+	c = lookback[(j - t.offset + k) % MAX_LOOKBACK];
+	putchar(c);
+	lookback[(j + k) % MAX_LOOKBACK] = c; 
+      }
+      j += t.length; 
+      putchar(t.c);
+      lookback[j++ % MAX_LOOKBACK] = t.c;
     }
-    j += t.length; 
-    c = t.c;
-    putchar(c);
-    outp[j % WINDOWSZ] = c;
-    j++;
   }
 
-    
-
-    
-  
-
-  
   return 0; 
 }

@@ -2,28 +2,38 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <fcntl.h>
 
-#define MAX_LOOKBACK 512
-#define WINDOWSZ     512
+// MAX_LOOKBACK is the maximum number of chars that the lzw algorithm
+// is allowed to look back. 
+// WINDOWSZ is the buffer window that is loaded into memory at once. 
+// BUFSZ takes into account the margins that have to be loaded as well. 
+
+#define K            1024
+#define M            (K*K)
+
+#define MAX_LOOKBACK (512)
+#define WINDOWSZ     M
 #define BUFSZ	     (WINDOWSZ + 2 * MAX_LOOKBACK)
 
-
 struct triple{
-  int  offset;
-  int  length;
+  int offset;
+  int length;
   char c;
 };
 
+void compress_file(FILE* file_input, FILE* file_output);
 int compress_buffer(char *buffer, int length, int start, int end, 
-		    struct triple *output, int fd_out);
+		    struct triple *output, FILE* file_out);
 
-char	      buffer[BUFSZ];
-struct triple outp[BUFSZ];
+static char	      buffer[BUFSZ];
+static struct triple  outp[BUFSZ];
 
+
+inline int min(int a, int b)
+{
+  return (a < b) ? a : b; 
+}
 
 int main(int argc, char * argv[])
 {
@@ -32,52 +42,46 @@ int main(int argc, char * argv[])
     exit(1);
   }
 
-  int fd_input  = open(argv[1], O_RDONLY);
-  int fd_output = open("output.bin", O_CREAT | O_TRUNC | O_WRONLY, S_IRWXU);
-  if(fd_input == -1){
+  FILE *fd_input  = fopen(argv[1], "r");
+  FILE *fd_output = fopen("output.bin", "w");
+  if(fd_input == NULL){
     printf("Input file could not be opened. \n");
     exit(1);
-  } else if (fd_output == -1){
+  } else if (fd_output == NULL){
     printf("Output file could not be opened. \n");
   }
 
-  
-  ssize_t buff_len = read(fd_input, buffer, BUFSZ * sizeof(buffer[0]));
-
-  int i             = 0; 
-  int window_offset = 0,
-      max_i         = 2 * WINDOWSZ;
-
-  for(window_offset = 0; ; window_offset += WINDOWSZ){
-    // compress buffer: 
-    i = compress_buffer(buffer, buff_len, i, max_i, outp, fd_output);
-
-    // copy the last two-thirds of the buffer to the front
-    // we use memcpy twice in order to avoid overlapping memory regions
-    memcpy(buffer,	      buffer + WINDOWSZ,     WINDOWSZ);
-    memcpy(buffer + WINDOWSZ, buffer + 2 * WINDOWSZ, WINDOWSZ); 
-    int read_sz = read(fd_input, buffer + 2 * WINDOWSZ, WINDOWSZ); 
-
-    // determine how much more work we have to do
-    if(read_sz == WINDOWSZ){	    // buffer filled
-      max_i = 2 * WINDOWSZ;         // buff_len unchanged 
-    } else if (0 < read_sz &&
-	       read_sz < WINDOWSZ){ // buffer partially filled
-      max_i = 2 * WINDOWSZ + read_sz;
-      buff_len = max_i; 
-    } else if(i < buff_len){	    // end of file, but not done
-      buff_len -= WINDOWSZ;         // buffer has been shifted left
-      max_i = buff_len;		    // finish everything
-    } else {			    // end of file, done
-      break;
-    }
-
-    i = i % (2 * WINDOWSZ);
-  }
+  compress_file(fd_input, fd_output); 
 
   return 0; 
 }
 
+/* compress_file
+   
+   arguments: 
+   - file_input: file to compress; 
+   - file_output: file to write the compressed byte stream.
+*/ 
+void compress_file(FILE *file_input, FILE *file_output)
+{
+  int i     = 0; 
+  int max_i = MAX_LOOKBACK + WINDOWSZ;
+
+  size_t buff_len = fread(buffer, 1, BUFSZ, file_input);
+  max_i = (max_i < buff_len) ? max_i : buff_len; 
+  i = compress_buffer(buffer, buff_len, i, max_i, outp, file_output); 
+  while(i < buff_len){ 
+    // assume max_i <= i
+    // move two blocks of lookback at the end to the front
+    memmove(buffer, buffer + WINDOWSZ - MAX_LOOKBACK, 2 * MAX_LOOKBACK); 
+    buff_len = fread(buffer + 2 * MAX_LOOKBACK, 1, WINDOWSZ, file_input); 
+    buff_len += 2 * MAX_LOOKBACK; 
+
+    i -= WINDOWSZ; // We just moved the buffer WINDOWSZ to the left
+    max_i = min(MAX_LOOKBACK + WINDOWSZ, buff_len); 
+    i = compress_buffer(buffer, buff_len, i, max_i, outp, file_output); 
+  }
+}
 
 /* compress_buffer
 
@@ -93,53 +97,50 @@ int main(int argc, char * argv[])
    an int with the last index used for compression. 
  */ 
 int compress_buffer(char *buffer, int length, int start, int end, 
-		    struct triple *output, int fd_out)
+		    struct triple *output, FILE *file_out)
 {
-
   int		i, j;	// i is index into buffer, j into output
   struct triple best_t;	// contains the best triple for each i
   int		l, o;	// contains length, offset running variables
-  int		max_offset;
 
-  i = start; 
+  int max_length, max_offset;
   j = 0;
-  for(; i < end; i += best_t.length + 1){
+  for(i = start; i < end; i += best_t.length + 1){
     best_t.offset = 0;
     best_t.length = 0;
     best_t.c      = buffer[i];
 
-    // Look for common substrings
-    max_offset = (i + 1 < WINDOWSZ) ? i + 1 : WINDOWSZ; // TODO: not sure this is correct
-    for(o = 0; o < max_offset; o++){
-      // The following must hold
-      // - i - o + l < i
-      // - i + l < buff_len
-      // - There must be a char left at the end of the
-      //   buffer to put in the triple.
-      for(l = 0; l < o && i + l < length; l++){
-	if(buffer[i + l] != buffer[i - o + l]){
-	  break; // l is now the length of the common substring
-	}
+    // for max_offset we must not reach 
+    //   in front of the buffer
+    //   outside of MAX_LOOKBACK
+    max_offset = min(i, MAX_LOOKBACK); 
+    for(o = max_offset; best_t.length < o; o--){
+      // length cannot exceed offset. 
+      // Also, the last triple must contain buffer[length - 1] as character. 
+      max_length = min(o, length - i - 1); 
+      for(l = 0; l < max_length; l++){
+    	if(buffer[i + l] != buffer[i - o + l]){
+    	  break;
+    	}
       }
-      if(best_t.length < l){
-	best_t.offset = o;
-	best_t.length = l;
-	best_t.c      = buffer[i + l];
+      if(best_t.length < l) {
+    	best_t.offset = o;
+    	best_t.length = l;
+    	best_t.c      = buffer[i + l];
       }
     }
 
     // best_t now contains the best triple for this index i
     // printf("(%d,%d,%c)\n", best_t.offset, best_t.length, best_t.c);
     // store it
-    output[j] = best_t;
-      
-    j++;
+    /* lengths[best_t.length] ++; */
+    output[j++] = best_t;
   }
 
   // write the triples
-  if(write(fd_out, output, j * sizeof(output[0])) < 0){ 
-    fprintf(stderr, "Could not write to output file\n"); 
-    exit(3); 
+  if(fwrite(output, sizeof(output[0]), j, file_out) != j){
+    fprintf(stderr, "Could not write to output file\n");
+    exit(3);
   }
   return i; 
 }
