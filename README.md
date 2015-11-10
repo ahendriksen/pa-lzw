@@ -1,4 +1,3 @@
-# pa-lzw
 LZW compression for parallel algorithms course
 ===============================================
 
